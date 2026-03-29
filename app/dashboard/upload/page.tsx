@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Upload, FileText, X, CheckCircle2, Loader2 } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
-import { candidates } from "@/lib/mock-data"
+import { candidates, type Candidate } from "@/lib/mock-data"
 import Link from "next/link"
 import { toast } from "sonner"
 
@@ -25,36 +25,79 @@ export default function UploadPage() {
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showParsed, setShowParsed] = useState(false)
+  const [parsedList, setParsedList] = useState<Candidate[]>([])
 
-  const simulateUpload = useCallback((fileName: string) => {
+  const uploadFile = useCallback(async (file: File | string) => {
+    const isMock = typeof file === "string"
+    const fileName = isMock ? file : file.name
     const id = Math.random().toString(36).substring(7)
-    const newFile: UploadedFile = {
+    
+    // 1. Add file to state as 'uploading'
+    setFiles(prev => [...prev, {
       id,
       name: fileName,
-      size: `${(Math.random() * 2 + 0.5).toFixed(1)} MB`,
+      size: isMock ? `${(Math.random() * 2 + 0.5).toFixed(1)} MB` : `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
       type: fileName.endsWith(".pdf") ? "PDF" : "DOCX",
-      progress: 0,
+      progress: isMock ? 0 : 10,
       status: "uploading",
-    }
-    setFiles(prev => [...prev, newFile])
+    }])
 
-    const interval = setInterval(() => {
-      setFiles(prev =>
-        prev.map(f => {
-          if (f.id !== id) return f
-          if (f.progress >= 100) {
-            clearInterval(interval)
-            return { ...f, progress: 100, status: "done" as const }
-          }
-          const newProgress = Math.min(f.progress + Math.random() * 30 + 10, 100)
-          return {
-            ...f,
-            progress: newProgress,
-            status: newProgress >= 100 ? "done" as const : newProgress >= 70 ? "processing" as const : "uploading" as const,
-          }
-        })
-      )
-    }, 500)
+    if (isMock) {
+      const interval = setInterval(() => {
+        setFiles(prev =>
+          prev.map(f => {
+            if (f.id !== id) return f
+            if (f.progress >= 100) {
+              clearInterval(interval)
+              return { ...f, progress: 100, status: "done" }
+            }
+            const newProgress = Math.min(f.progress + Math.random() * 30 + 10, 100)
+            return {
+              ...f,
+              progress: newProgress,
+              status: newProgress >= 100 ? "done" : newProgress >= 70 ? "processing" : "uploading",
+            }
+          })
+        )
+      }, 500)
+      return
+    }
+
+    const formData = new FormData()
+    formData.append("file", file)
+
+    try {
+      // 2. Send to our Next.js API Route
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) throw new Error("Upload failed")
+      
+      const result = await response.json()
+
+      // 3. Mark as done
+      setFiles(prev => prev.map(f => 
+        f.id === id ? { ...f, progress: 100, status: "done" } : f
+      ))
+      
+      if (result.success && result.candidate) {
+        setParsedList(prev => [result.candidate, ...prev])
+        setShowParsed(true)
+      }
+      
+      toast.success(`${fileName} uploaded successfully!`)
+      
+      // You now have access to result.url and result.path from Supabase!
+      console.log("Supabase File URL:", result.url)
+
+    } catch (error) {
+      console.error(error)
+      toast.error(`Failed to upload ${fileName}`)
+      // Remove the failed file from UI
+      setFiles(prev => prev.filter(f => f.id !== id))
+    }
   }, [])
 
   const handleDrop = useCallback(
@@ -62,22 +105,22 @@ export default function UploadPage() {
       e.preventDefault()
       setIsDragging(false)
       const droppedFiles = Array.from(e.dataTransfer.files)
-      droppedFiles.forEach(file => simulateUpload(file.name))
+      droppedFiles.forEach(file => uploadFile(file))
       toast.success(`${droppedFiles.length} file(s) uploaded`)
     },
-    [simulateUpload]
+    [uploadFile]
   )
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || [])
-    selectedFiles.forEach(file => simulateUpload(file.name))
+    selectedFiles.forEach(file => uploadFile(file))
     toast.success(`${selectedFiles.length} file(s) uploaded`)
   }
 
   const handleDemoUpload = () => {
     const demoFiles = ["Sarah_Chen_Resume.pdf", "Marcus_Johnson_CV.pdf", "Emily_Rodriguez_Resume.docx"]
     demoFiles.forEach((name, i) => {
-      setTimeout(() => simulateUpload(name), i * 300)
+      setTimeout(() => uploadFile(name), i * 300)
     })
     toast.success("Demo files uploaded")
     setTimeout(() => setShowParsed(true), 4000)
@@ -102,11 +145,10 @@ export default function UploadPage() {
           <Card className="border-border/50">
             <CardContent className="p-0">
               <div
-                className={`relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-12 transition-colors ${
-                  isDragging
+                className={`relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-12 transition-colors ${isDragging
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/50"
-                }`}
+                  }`}
                 onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
@@ -217,7 +259,7 @@ export default function UploadPage() {
               >
                 <h3 className="mb-4 text-sm font-semibold text-foreground">Parsed Candidates</h3>
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {candidates.slice(0, 3).map((candidate, index) => (
+                  {(parsedList.length > 0 ? parsedList : candidates.slice(0, 3)).map((candidate, index) => (
                     <motion.div
                       key={candidate.id}
                       initial={{ opacity: 0, y: 10 }}
