@@ -5,13 +5,17 @@ import { createClient } from "@supabase/supabase-js"
 // @ts-ignore
 import pdfParse from "pdf-parse"
 
+export const runtime = "nodejs"
+
+const STORAGE_BUCKET = "resumes"
+
 // Initialize OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-// Initialize Supabase client
+// Prefer the server-only key, but fall back to the current env name so existing setups keep working.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
 export async function POST(req: NextRequest) {
@@ -43,42 +47,38 @@ export async function POST(req: NextRequest) {
     const filePath = `candidates/${uniqueFileName}`
 
     const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("resumes")
+      .from(STORAGE_BUCKET)
       .upload(filePath, buffer, {
-        contentType: file.type || "application/pdf",
+        contentType: "application/pdf",
         upsert: false,
       })
 
     if (uploadError) {
       console.error("Supabase upload error:", uploadError)
       return NextResponse.json(
-        { success: false, error: "Failed to upload to Supabase." },
+        { success: false, error: uploadError.message || "Failed to upload to Supabase." },
         { status: 500 }
       )
     }
 
     const { data: publicUrlData } = supabase.storage
-      .from("resumes")
+      .from(STORAGE_BUCKET)
       .getPublicUrl(filePath)
 
-    // Parse the PDF
+    let candidate = null
+    let warning: string | null = null
     let pdfText = ""
+
     try {
       const data = await pdfParse(buffer)
       pdfText = data.text
     } catch (parseError: any) {
       console.error("PDF Parsing Error:", parseError)
-      return NextResponse.json(
-        { success: false, error: "Failed to read text from PDF." },
-        { status: 500 }
-      )
+      warning = parseError.message || "The file was uploaded, but the PDF text could not be read."
     }
 
-    if (!pdfText.trim()) {
-      return NextResponse.json(
-        { success: false, error: "PDF appears to be empty or unreadable." },
-        { status: 400 }
-      )
+    if (!warning && !pdfText.trim()) {
+      warning = "The file was uploaded, but the PDF appears to be empty or unreadable."
     }
 
     const schemaDefinition = `
@@ -119,31 +119,38 @@ export async function POST(req: NextRequest) {
 }
     `
 
-    // Use OpenAI to extract structured data via JSON mode
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert HR assistant and technical recruiter. Extract and evaluate candidate information from the following resume text. Output strictly valid JSON matching this schema: ${schemaDefinition}. Generate a random unique ID for the candidate. Give an AI score out of 100 based on the candidate's quality, experience, and formatting.`
-        },
-        { role: "user", content: pdfText },
-      ],
-      response_format: { type: "json_object" },
-    })
+    if (!warning) {
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert HR assistant and technical recruiter. Extract and evaluate candidate information from the following resume text. Output strictly valid JSON matching this schema: ${schemaDefinition}. Generate a random unique ID for the candidate. Give an AI score out of 100 based on the candidate's quality, experience, and formatting.`
+            },
+            { role: "user", content: pdfText },
+          ],
+          response_format: { type: "json_object" },
+        })
 
-    const responseContent = completion.choices[0]?.message?.content
-    if (!responseContent) {
-      throw new Error("Failed to parse candidate data from OpenAI")
+        const responseContent = completion.choices[0]?.message?.content
+        if (!responseContent) {
+          throw new Error("Failed to parse candidate data from OpenAI")
+        }
+
+        candidate = JSON.parse(responseContent)
+      } catch (candidateError: any) {
+        console.error("Candidate extraction error:", candidateError)
+        warning = candidateError.message || "The file was uploaded, but candidate extraction failed."
+      }
     }
-
-    const candidate = JSON.parse(responseContent)
 
     return NextResponse.json({
       success: true,
       candidate,
       path: uploadData.path,
-      url: publicUrlData.publicUrl
+      url: publicUrlData.publicUrl,
+      warning,
     })
   } catch (error: any) {
     console.error("Upload API Error:", error)

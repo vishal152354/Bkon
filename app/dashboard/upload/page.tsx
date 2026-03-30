@@ -73,28 +73,35 @@ export default function UploadPage() {
         body: formData,
       })
 
-      if (!response.ok) throw new Error("Upload failed")
-      
       const result = await response.json()
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Upload failed")
+      }
 
       // 3. Mark as done
       setFiles(prev => prev.map(f => 
         f.id === id ? { ...f, progress: 100, status: "done" } : f
       ))
       
-      if (result.success && result.candidate) {
+      if (result.candidate) {
         setParsedList(prev => [result.candidate, ...prev])
         setShowParsed(true)
       }
-      
-      toast.success(`${fileName} uploaded successfully!`)
-      
-      // You now have access to result.url and result.path from Supabase!
-      console.log("Supabase File URL:", result.url)
+
+      toast.success(`${fileName} stored in Supabase`)
+
+      if (result.warning) {
+        toast.warning(`${fileName}: ${result.warning}`)
+      }
+
+      console.log("Supabase file path:", result.path)
+      console.log("Supabase file URL:", result.url)
 
     } catch (error) {
       console.error(error)
-      toast.error(`Failed to upload ${fileName}`)
+      const message = error instanceof Error ? error.message : "Upload failed"
+      toast.error(`Failed to upload ${fileName}: ${message}`)
       // Remove the failed file from UI
       setFiles(prev => prev.filter(f => f.id !== id))
     }
@@ -106,7 +113,6 @@ export default function UploadPage() {
       setIsDragging(false)
       const droppedFiles = Array.from(e.dataTransfer.files)
       droppedFiles.forEach(file => uploadFile(file))
-      toast.success(`${droppedFiles.length} file(s) uploaded`)
     },
     [uploadFile]
   )
@@ -114,7 +120,6 @@ export default function UploadPage() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || [])
     selectedFiles.forEach(file => uploadFile(file))
-    toast.success(`${selectedFiles.length} file(s) uploaded`)
   }
 
   const handleDemoUpload = () => {
@@ -122,7 +127,7 @@ export default function UploadPage() {
     demoFiles.forEach((name, i) => {
       setTimeout(() => uploadFile(name), i * 300)
     })
-    toast.success("Demo files uploaded")
+    toast.info("Demo upload is simulated only and does not store files in Supabase")
     setTimeout(() => setShowParsed(true), 4000)
   }
 
@@ -160,14 +165,14 @@ export default function UploadPage() {
                   Drop your resumes here
                 </h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  or click to browse. Supports PDF and DOCX.
+                  or click to browse. Supports PDF only.
                 </p>
                 <div className="mt-6 flex gap-3">
                   <label>
                     <input
                       type="file"
                       className="hidden"
-                      accept=".pdf,.docx"
+                      accept=".pdf"
                       multiple
                       onChange={handleFileInput}
                     />
@@ -176,7 +181,7 @@ export default function UploadPage() {
                     </Button>
                   </label>
                   <Button onClick={handleDemoUpload}>
-                    Upload Demo Files
+                    Run Demo Simulation
                   </Button>
                 </div>
               </div>
