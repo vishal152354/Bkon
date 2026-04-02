@@ -145,6 +145,34 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Save to Database
+    if (candidate) {
+      const { error: dbError } = await supabase
+        .from('candidates')
+        .insert({
+          file_path: uploadData.path,
+          file_url: publicUrlData.publicUrl,
+          name: candidate.name,
+          email: candidate.email,
+          phone: candidate.phone,
+          location: candidate.location,
+          linkedin: candidate.linkedin,
+          portfolio: candidate.portfolio,
+          skills: candidate.skills,
+          experience: candidate.experience,
+          education: candidate.education,
+          ai_score: candidate.aiScore,
+          insights: candidate.insights
+        })
+
+      if (dbError) {
+        console.error("Database insert error:", dbError)
+        warning = warning
+          ? `${warning} Also, failed to save to database: ${dbError.message}`
+          : `Saved to storage but database insert failed: ${dbError.message}`
+      }
+    }
+
     return NextResponse.json({
       success: true,
       candidate,
